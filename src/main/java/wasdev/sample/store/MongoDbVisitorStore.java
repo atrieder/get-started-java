@@ -34,6 +34,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 import org.bson.Document;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.MongoCollection;
@@ -235,7 +236,10 @@ public class MongoDbVisitorStore implements VisitorStore {
                 return null;
             }
             url = mongoCredentials.get("uri").getAsString();
-            certString = mongoCredentials.get("ca_certificate_base64").getAsString();
+            JsonElement certObject = mongoCredentials.get("ca_certificate_base64");
+            if (certObject != null) {
+                certString = mongoCredentials.get("ca_certificate_base64").getAsString();
+            }
         } else {
             System.out.println("Running locally. Looking for credentials in mongo.properties");
             url = VCAPHelper.getLocalProperties("mongo.properties").getProperty("mongo_url");
@@ -247,10 +251,10 @@ public class MongoDbVisitorStore implements VisitorStore {
             certString = VCAPHelper.getLocalProperties("mongo.properties").getProperty("mongo_ssl");
         }
 
-        if (keyStore != null) {
+        if (certString != null && keyStore != null) {
             System.setProperty("javax.net.ssl.trustStore", keyStoreName);
             System.setProperty("javax.net.ssl.trustStorePassword", keyStorePass);
-
+            
             addCertToKeyStore(keyStore, certString);
         } else {
             System.out.println("A TrustStore could not be found or created.");
