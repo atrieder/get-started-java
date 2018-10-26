@@ -25,13 +25,21 @@ import java.lang.String;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+import java.security.KeyManagementException;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Set;
+
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 
 import org.bson.Document;
 import com.google.gson.JsonElement;
@@ -42,6 +50,8 @@ import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.MongoIterable;
 import com.mongodb.client.result.DeleteResult;
 import com.mongodb.MongoClient;
+import com.mongodb.MongoClientOptions;
+import com.mongodb.MongoClientOptions.Builder;
 import com.mongodb.MongoClientURI;
 
 import wasdev.sample.Visitor;
@@ -216,6 +226,35 @@ public class MongoDbVisitorStore implements VisitorStore {
         }
     }
 
+    /**
+     * Dummy SSLSocketFactory for the MongoClient to use when no certificate is
+     * available. This should ONLY be used when the certificate is not
+     * provided, as it is inherently less secure (since it blindly trusts
+     * everything).
+     */
+    private static SSLSocketFactory getNoopSSLSocketFactory() {
+        SSLContext sslContext = null;
+        try {
+            sslContext = SSLContext.getInstance("SSL");
+
+            sslContext.init(null, new TrustManager[] { new X509TrustManager() {
+                @Override
+                public void checkClientTrusted(X509Certificate[] x509Certificates, String s) throws CertificateException { }
+                @Override
+                public void checkServerTrusted(X509Certificate[] x509Certificates, String s) throws CertificateException { }
+                @Override
+                public X509Certificate[] getAcceptedIssuers() {
+                    return new X509Certificate[0];
+                }
+            }}, new SecureRandom());
+        } catch (NoSuchAlgorithmException | KeyManagementException e) {
+            System.out.println("Could not create dummy SSL context.");
+
+        }
+
+        return sslContext.getSocketFactory();
+    }
+
     private static MongoClient createClient() {
         String keyStoreName = getKeyStoreName(),
                keyStorePass = getKeyStorePass();
@@ -251,18 +290,28 @@ public class MongoDbVisitorStore implements VisitorStore {
             certString = VCAPHelper.getLocalProperties("mongo.properties").getProperty("mongo_ssl");
         }
 
-        if (certString != null && keyStore != null) {
+        MongoClientURI mongoURI = new MongoClientURI(url);
+
+        if ((certString != null && certString.length() > 0) && keyStore != null) {
             System.setProperty("javax.net.ssl.trustStore", keyStoreName);
             System.setProperty("javax.net.ssl.trustStorePassword", keyStorePass);
             
             addCertToKeyStore(keyStore, certString);
         } else {
             System.out.println("A TrustStore could not be found or created.");
+
+            // Use a dummy SocketFactory that trusts everything
+            MongoClientOptions mongoOptions = mongoURI.getOptions();
+            Builder optionsBuilder = new Builder(mongoOptions);
+            optionsBuilder.socketFactory(getNoopSSLSocketFactory());
+            mongoURI = new MongoClientURI(url, optionsBuilder);
+            
+            System.out.println("WARNING: Certificate validation will be skipped. To avoid this, please manually add the database instance's certificate to your local trust store.");
         }
 
         try {
             System.out.println("Connecting to MongoDb");
-            MongoClient client = new MongoClient(new MongoClientURI(url));
+            MongoClient client = new MongoClient(mongoURI);//new MongoClientURI(url));
             return client;
         } catch (Exception e) {
             System.out.println("Unable to connect to database");
